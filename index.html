@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html class="no-js" lang="">
+  <head>
+    <meta charset="utf-8" />
+    <title></title>
+    <meta name="description" content="" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!--  <link rel="manifest" href="site.webmanifest">-->
+    <link rel="apple-touch-icon" href="icon.png" />
+    <!-- Place favicon.ico in the root directory -->
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/rough.js/2.1.1/rough.js"
+      integrity="sha512-sZtT5AmC0DFqxtF/WG8fUVvsum8ZkIoHa08hQO5css2CRXZrvMt9DwMZ4hFNQZiJtwZnmc413p/msPhYMyjlPA=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+    <script type="module" src="https://unpkg.com/wired-elements?module"></script>
+
+    <meta name="theme-color" content="#fafafa" />
+
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+
+      /* to remove the top and left whitespace */
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+      }
+
+      /* just to be sure these are full screen*/
+
+      canvas {
+        display: block;
+      }
+
+      /* To remove the scrollbars */
+    </style>
+  </head>
+
+  <body>
+    <canvas style="width: 100vw; height: 100vh"></canvas>
+    <div style="position: absolute; bottom: 20px; left: 10px">
+      <wired-button id="bfs">BFS Start</wired-button>
+    </div>
+  </body>
+
+  <script>
+    /*
+     * todo:
+     *  - refactor wall state management (hover-wall wall empty and so on)
+     *  - move goal
+     *  - move start
+     *  - dfs bfs a* (new states: watched, visited)
+     */
+
+    const range = (to) => Array.from({ length: to }).map((v, i) => i);
+    const pop = (arr) => {
+      const copy = [...arr];
+      const element = copy.pop();
+      return {
+        arr: copy,
+        element,
+      };
+    };
+
+    const walkTroughCoordinate = ({ x, y }) =>
+      range(x).reduce((acc, valX) => [...acc, ...range(y).map((valY) => ({ x: valX, y: valY }))], []);
+
+    const inBetween = ({ start, range, value }) => start <= value && start + range >= value;
+
+    const setObject = (object, key, value) => ({
+      ...object,
+      [key]: value,
+    });
+
+    const setBoardFields = (boardState, ...fieldArgs) => {
+      return setObject(boardState, "fields", setOnPosition2DBulk(boardState.fields, ...fieldArgs));
+    };
+
+    const setOnPosition = (arr, idx, cb) => {
+      const copy = [...arr];
+      copy[idx] = cb(copy[idx]);
+      return copy;
+    };
+
+    const setOnPosition2D = (arr, { x, y, map }) => {
+      const copy = [...arr];
+      if (x < 0 || y < 0) {
+        return copy;
+      }
+      copy[y] = [...arr[y]];
+      copy[y][x] = map(copy[y][x]);
+      return copy;
+    };
+
+    const setOnPosition2DBulk = (arr, ...args) =>
+      args.reduce(
+        (arr, { x, y, map }) =>
+          setOnPosition2D(arr, {
+            x,
+            y,
+            map,
+          }),
+        arr
+      );
+
+    const find2d = (arr, predicate) => {
+      let x = -1;
+      const y = arr.findIndex((arr, y) => {
+        const index = arr.findIndex((value, x) => predicate({ value, x, y }));
+        if (index >= 0) {
+          x = index;
+        }
+        return index >= 0;
+      });
+
+      return [x, y];
+    };
+
+    const coordinateToScreenPos = ({ boardState, x, y }) => {
+      const offset = 10;
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const size = Math.min((width - offset * 2) / boardState.x, (height - offset * 2) / boardState.y);
+
+      return {
+        x,
+        y,
+        screenX: offset + size * x,
+        screenY: offset + size * y,
+        size,
+      };
+    };
+
+    const memoize = (f) => {
+      const map = new Map();
+      return (arg) => {
+        const key = JSON.stringify(arg);
+        if (map.has(key)) {
+          return map.get(key);
+        } else {
+          const result = f(arg);
+          map.set(key, result);
+          return result;
+        }
+      };
+    };
+
+    // prettier-ignore
+    const initialBoardState = {
+    x: 25,
+    y: 10,
+    isSolving: false,
+    fields: [
+      ['empty', 'empty', 'empty', 'wall', 'empty', 'empty', 'empty', 'wall', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty'],
+      ['empty', 'empty', 'empty', 'wall', 'empty', 'wall', 'empty', 'wall', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty'],
+      ['empty', 'empty', 'empty', 'wall', 'empty', 'wall', 'empty', 'wall', 'empty', 'empty', 'goal', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty'],
+      ['empty', 'empty', 'empty', 'wall', 'empty', 'wall', 'empty', 'wall', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty'],
+      ['empty', 'empty', 'empty', 'empty', 'empty', 'wall', 'empty', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty'],
+      ['empty', 'empty', 'empty', 'wall', 'empty', 'wall', 'empty', 'wall', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty'],
+      ['empty', 'empty', 'empty', 'wall', 'empty', 'wall', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty'],
+      ['empty', 'empty', 'empty', 'wall', 'empty', 'wall', 'empty', 'wall', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty'],
+      ['empty', 'start', 'empty', 'wall', 'empty', 'wall', 'empty', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
+      ['empty', 'empty', 'empty', 'wall', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty', 'empty']
+    ]
+  };
+
+    (function () {
+      const canvas = document.querySelector("canvas");
+      const rc = rough.canvas(document.querySelector("canvas"));
+      // use memoize because otherwise the rectangle looks different with each rc.rectangle call
+      const memoizeRcGenerateRectangle = memoize(({ startX, startY, size, style }) =>
+        rc.generator.rectangle(startX, startY, size, size, style)
+      );
+
+      // property: start|empty|wall|goal
+      const toStyle = (property) => {
+        if (property === "wall") {
+          return { fill: "black", fillStyle: "solid" };
+        }
+        if (property === "start") {
+          return { fill: "red", fillStyle: "solid" };
+        }
+        if (property === "goal") {
+          return { fill: "purple", fillStyle: "solid" };
+        }
+        if (property === "hover-wall") {
+          return { fill: "black", fillStyle: "hachure" };
+        }
+        if (property === "hover-empty") {
+          return { fill: "lightGray", fillStyle: "hachure" };
+        }
+        if (property === "visited") {
+          return { fill: "green", fillStyle: "hachure" };
+        }
+        if (property === "path") {
+          return { fill: "blue", fillStyle: "hachure" };
+        }
+        return { fill: "white", fillStyle: "solid" };
+      };
+
+      const setCanvasSize = () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      };
+
+      const drawParams = ({ boardState, width, height }) =>
+        walkTroughCoordinate(boardState).map(({ x, y }) => ({
+          ...coordinateToScreenPos({ boardState, x, y }),
+          style: toStyle(boardState.fields[y][x]),
+        }));
+
+      const createBoardQueue = (worker) => {
+        const entries = [];
+        let working = false;
+        let lastBoardState = undefined;
+
+        const runNext = async () => {
+          if (working || entries.length === 0) {
+            return;
+          }
+          working = true;
+          // dequeue
+          const entry = entries.shift();
+
+          const val = await worker(entry.boardState, entry.inRequestAnimationFrame);
+          working = false;
+          entry.doneCb(val);
+          await runNext();
+        };
+
+        return {
+          async enqueue(boardState, inRequestAnimationFrame = false) {
+            return new Promise((resolve) => {
+              entries.push({
+                boardState,
+                inRequestAnimationFrame,
+                doneCb: resolve,
+              });
+              lastBoardState = boardState;
+              queueMicrotask(runNext);
+            });
+          },
+          last() {
+            return new Promise((resolve) => {
+              const { boardState } = pop(entries)?.element ?? {
+                boardState: lastBoardState,
+              };
+              entries.push({
+                boardState,
+                inRequestAnimationFrame: false,
+                doneCb: resolve,
+              });
+              queueMicrotask(runNext);
+            });
+          },
+        };
+      };
+
+      const boardQueue = createBoardQueue(async (boardState, inRequestAnimationFrame = false) => {
+        return new Promise((resolve) => {
+          const fn = () => {
+            const params = drawParams({
+              boardState,
+              width: window.innerWidth,
+              height: window.innerHeight,
+            });
+            canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+            params.map(({screenX, screenY, size, style}) =>
+              rc.draw(
+                memoizeRcGenerateRectangle({
+                  startX: screenX,
+                  startY: screenY,
+                  size,
+                  style,
+                })
+              )
+            );
+            resolve(boardState);
+          };
+          if(inRequestAnimationFrame){
+            requestAnimationFrame(fn);
+          } else {
+            fn();
+          }
+        });
+      });
+
+      const renderBoard = (
+        (boardQueue) => async () =>
+          boardQueue.last()
+      )(boardQueue);
+
+      window.addEventListener(
+        "resize",
+        async () => {
+          setCanvasSize();
+          await renderBoard();
+        },
+        { passive: true }
+      );
+
+      window.addEventListener("mousemove", async (event) => {
+        const boardState = await boardQueue.last();
+        // if (boardState.isSolving) {
+        //   return;
+        // }
+
+        const [hoverX, hoverY] = find2d(boardState.fields, ({ x, y }) => {
+          const { screenX, screenY, size } = coordinateToScreenPos({ boardState, x, y });
+          return (
+            inBetween({ start: screenX, range: size, value: event.clientX }) &&
+            inBetween({ start: screenY, range: size, value: event.clientY })
+          );
+        });
+        const [hoverWallX, hoverWallY] = find2d(boardState.fields, ({ value }) => value === "hover-wall");
+        const [hoverEmptyX, hoverEmptyY] = find2d(boardState.fields, ({ value }) => value === "hover-empty");
+
+        void boardQueue.enqueue(
+          setBoardFields(
+            boardState,
+            { x: hoverWallX, y: hoverWallY, map: () => "empty" },
+            { x: hoverEmptyX, y: hoverEmptyY, map: () => "wall" },
+            {
+              x: hoverX,
+              y: hoverY,
+              map: (entry) => {
+                if (entry === "empty") {
+                  return "hover-wall";
+                } else if (entry === "wall") {
+                  return "hover-empty";
+                } else {
+                  return entry;
+                }
+              },
+            }
+          )
+        );
+      });
+
+      canvas.addEventListener("click", async (event) => {
+        const boardState = await boardQueue.last();
+
+        const [x, y] = find2d(boardState.fields, ({ x, y }) => {
+          const { screenX, screenY, size } = coordinateToScreenPos({ boardState, x, y });
+          return (
+            inBetween({ start: screenX, range: size, value: event.clientX }) &&
+            inBetween({ start: screenY, range: size, value: event.clientY })
+          );
+        });
+
+        void boardQueue.enqueue(
+          setBoardFields(boardState, {
+            x,
+            y,
+            map: (e) => {
+              if (e === "empty" || e === "hover-wall") {
+                return "wall";
+              } else if (e === "wall" || e === "hover-empty") {
+                return "empty";
+              } else {
+                return e;
+              }
+            },
+          })
+        );
+      });
+
+      document.querySelector("#bfs").addEventListener("click", async () => {
+        await boardQueue
+          .last()
+          .then((boardState) => boardQueue.enqueue(setObject(boardState, "isSolving", true)))
+          .then((boardState) => bfs(boardState));
+      });
+
+      const bfs = async (boardState) => {
+        const [x, y] = find2d(boardState.fields, ({ value }) => value === "start");
+        const queue = [{ x, y, parent: [] }];
+
+        let bs = boardState;
+        let goal = null;
+
+        while (queue.length > 0) {
+          const { x, y, parent } = queue.shift();
+          const neighbors = [
+            { x: x - 1, y },
+            { x: x + 1, y },
+            { x, y: y - 1 },
+            { x, y: y + 1 },
+          ].map((n) => ({
+            ...n,
+            parent: [...parent, [x, y]],
+          }));
+          const inRangeNeighbors = neighbors
+            .filter(({ x }) => x >= 0 && x < bs.x)
+            .filter(({ y }) => y >= 0 && y < bs.y);
+
+          const validNeighbors = inRangeNeighbors.filter(({ x, y }) => bs.fields[y][x] === "empty");
+
+          goal = inRangeNeighbors.find(({ x, y }) => bs.fields[y][x] === "goal");
+          if (goal) {
+            break;
+          }
+
+          bs = await validNeighbors.reduce(
+            async (boardStateP, { x, y }) =>
+              boardQueue.enqueue(
+                setBoardFields(await boardStateP, {
+                  x,
+                  y,
+                  map: () => "visited",
+                }), true
+              ),
+            Promise.resolve(bs)
+          );
+
+          validNeighbors.forEach((n) => queue.push(n));
+        }
+
+        if (goal) {
+          return boardQueue.enqueue(
+            setBoardFields(
+              bs,
+              ...goal.parent.map(([x, y]) => ({
+                x,
+                y,
+                map: (entry) => (entry === "start" || entry === "goal" ? entry : "path"),
+              }))
+            ),
+            true
+          );
+        } else {
+          alert("no solution");
+        }
+      };
+
+      setCanvasSize();
+      boardQueue.enqueue(initialBoardState);
+      renderBoard();
+    })();
+  </script>
+</html>
