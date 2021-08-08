@@ -47,13 +47,13 @@
     <canvas style="width: 100vw; height: 100vh"></canvas>
     <div style="position: absolute; bottom: 20px; left: 10px">
       <wired-button id="bfs">BFS Start</wired-button>
+      <wired-button id="clear" style="margin-left: 20px">Clear</wired-button>
     </div>
   </body>
 
   <script>
     /*
      * todo:
-     *  - refactor wall state management (hover-wall wall empty and so on)
      *  - move goal
      *  - move start
      *  - dfs bfs a* (new states: watched, visited)
@@ -81,6 +81,10 @@
 
     const setBoardFields = (boardState, ...fieldArgs) => {
       return setObject(boardState, "fields", setOnPosition2DBulk(boardState.fields, ...fieldArgs));
+    };
+
+    const setBoardToSolving = (boardState) => {
+      return setObject(boardState, "isSolving", true);
     };
 
     const setOnPosition = (arr, idx, cb) => {
@@ -229,18 +233,21 @@
           // dequeue
           const entry = entries.shift();
 
-          const val = await worker(entry.boardState, entry.inRequestAnimationFrame);
+          const val = await worker(entry.boardState, entry.opt);
           working = false;
           entry.doneCb(val);
           await runNext();
         };
 
         return {
-          async enqueue(boardState, inRequestAnimationFrame = false) {
+          async enqueue(boardState, opt = {}) {
             return new Promise((resolve) => {
               entries.push({
                 boardState,
-                inRequestAnimationFrame,
+                opt: {
+                  delay: null, // 'requestAnimationFrame' | number | null
+                  ...opt,
+                },
                 doneCb: resolve,
               });
               lastBoardState = boardState;
@@ -248,22 +255,16 @@
             });
           },
           last() {
-            return new Promise((resolve) => {
-              const { boardState } = pop(entries)?.element ?? {
+            return (
+              pop(entries)?.element ?? {
                 boardState: lastBoardState,
-              };
-              entries.push({
-                boardState,
-                inRequestAnimationFrame: false,
-                doneCb: resolve,
-              });
-              queueMicrotask(runNext);
-            });
+              }
+            );
           },
         };
       };
 
-      const boardQueue = createBoardQueue(async (boardState, inRequestAnimationFrame = false) => {
+      const boardQueue = createBoardQueue(async (boardState, opt) => {
         return new Promise((resolve) => {
           const fn = () => {
             const params = drawParams({
@@ -272,7 +273,7 @@
               height: window.innerHeight,
             });
             canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
-            params.map(({screenX, screenY, size, style}) =>
+            params.map(({ screenX, screenY, size, style }) =>
               rc.draw(
                 memoizeRcGenerateRectangle({
                   startX: screenX,
@@ -284,8 +285,10 @@
             );
             resolve(boardState);
           };
-          if(inRequestAnimationFrame){
+          if (opt.delay === "requestAnimationFrame") {
             requestAnimationFrame(fn);
+          } else if (Number.isInteger(opt.delay)) {
+            setTimeout(fn, opt.delay);
           } else {
             fn();
           }
@@ -307,7 +310,7 @@
       );
 
       window.addEventListener("mousemove", async (event) => {
-        const boardState = await boardQueue.last();
+        const { boardState } = boardQueue.last();
         // if (boardState.isSolving) {
         //   return;
         // }
@@ -345,7 +348,7 @@
       });
 
       canvas.addEventListener("click", async (event) => {
-        const boardState = await boardQueue.last();
+        const { boardState } = boardQueue.last();
 
         const [x, y] = find2d(boardState.fields, ({ x, y }) => {
           const { screenX, screenY, size } = coordinateToScreenPos({ boardState, x, y });
@@ -370,13 +373,6 @@
             },
           })
         );
-      });
-
-      document.querySelector("#bfs").addEventListener("click", async () => {
-        await boardQueue
-          .last()
-          .then((boardState) => boardQueue.enqueue(setObject(boardState, "isSolving", true)))
-          .then((boardState) => bfs(boardState));
       });
 
       const bfs = async (boardState) => {
@@ -407,6 +403,7 @@
           if (goal) {
             break;
           }
+          const wait = (ms) => new Promise(resolve => setTimeout(() => resolve(), ms));
 
           bs = await validNeighbors.reduce(
             async (boardStateP, { x, y }) =>
@@ -415,7 +412,10 @@
                   x,
                   y,
                   map: () => "visited",
-                }), true
+                }),
+                {
+                  delay: "requestAnimationFrame",
+                }
               ),
             Promise.resolve(bs)
           );
@@ -424,16 +424,19 @@
         }
 
         if (goal) {
-          return boardQueue.enqueue(
-            setBoardFields(
-              bs,
-              ...goal.parent.map(([x, y]) => ({
-                x,
-                y,
-                map: (entry) => (entry === "start" || entry === "goal" ? entry : "path"),
-              }))
-            ),
-            true
+          goal.parent.reduce(
+            async (boardStateP, [x, y]) =>
+              boardQueue.enqueue(
+                setBoardFields(await boardStateP, {
+                  x,
+                  y,
+                  map: (entry) => (entry === "start" || entry === "goal" ? entry : "path"),
+                }),
+                {
+                  delay: 50,
+                }
+              ),
+            Promise.resolve(bs)
           );
         } else {
           alert("no solution");
@@ -443,6 +446,14 @@
       setCanvasSize();
       boardQueue.enqueue(initialBoardState);
       renderBoard();
+
+      document
+        .querySelector("#bfs")
+        .addEventListener("click", async () =>
+          bfs(await boardQueue.enqueue(setBoardToSolving(boardQueue.last().boardState)))
+        );
+
+      document.querySelector("#clear").addEventListener("click", async () => boardQueue.enqueue(initialBoardState));
     })();
   </script>
 </html>
